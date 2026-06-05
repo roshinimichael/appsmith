@@ -1,0 +1,81 @@
+name: Skyramp Testbot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.actor != 'skyramp-testbot[bot]' }}
+
+jobs:
+  testbot:
+    # Only run for pull_request events or issue_comment on PRs mentioning @skyramp-testbot
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '@skyramp-testbot') && github.event.comment.user.login != 'skyramp-testbot[bot]')
+    runs-on: 'ubuntu-latest'
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: write
+
+    steps:
+      # Generate a GitHub App installation token to retrigger CI workflows on push
+      # https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/making-authenticated-api-requests-with-a-github-app-in-a-github-actions-workflow
+      - name: Generate GitHub App Token
+        id: skyramp-testbot-app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.SKYRAMP_TESTBOT_APP_ID }}
+          private-key: ${{ secrets.SKYRAMP_TESTBOT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.skyramp-testbot-app-token.outputs.token }}
+
+      # SETUP: Java 25 (Temurin) required by app/server/build.sh — not pre-installed on ubuntu-latest
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      # SETUP: Node.js ^24 required by app/client and app/client/packages/rts builds
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: app/client/package.json
+
+      # SETUP: DockerHub login to pull appsmith/base-ce:release and appsmith/cloud-services:release
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - uses: skyramp/testbot@eval-sut # v0.10.3
+        with:
+          skyrampLicenseFile: ${{ secrets.SKYRAMP_LICENSE_FILE }}
+          anthropicApiKey: ${{ secrets.SKYRAMP_TESTBOT_API_KEY }}
+          githubToken: ${{ steps.skyramp-testbot-app-token.outputs.token }}
+          skyrampMcpVersion: next
+          sutSetupMode: adapt_workflow
+          sutSourceWorkflowFile: .github/workflows/pr-cypress.yml
+          # Pattern B: targetSetupCommand builds all components from PR source and starts all containers
+          targetSetupCommand: 'bash .skyramp/sut/start.sh'
+          # Poll Appsmith's health endpoint until the app is fully initialized
+          targetReadyCheckCommand: 'curl -sf http://localhost/api/v1/health'
+          # 300s for Appsmith to initialize after containers are up (healthcheck start-period=45s + startup time)
+          targetReadyCheckTimeout: '300'
+          # Stop and remove all SUT containers after tests
+          targetTeardownCommand: 'docker rm -f appsmith cloud-services test-event-driver sut-redis sut-mongo 2>/dev/null || true'
+          # Create Appsmith admin user and return session cookie for API tests
+          authTokenCommand: 'bash .skyramp/sut/get-auth-token.sh'
+          # Credentials for browser-based UI test recording (first-boot admin user seeded in get-auth-token.sh)
+          uiCredentials: 'appsmith@appsmith.com:admin123'
+        env:
+          LAUNCHDARKLY_BUSINESS_FLAGS_SERVER_KEY: ${{ secrets.LAUNCHDARKLY_BUSINESS_FLAGS_SERVER_KEY }}
