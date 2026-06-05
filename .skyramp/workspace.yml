@@ -1,0 +1,33 @@
+# Skyramp Workspace Configuration
+workspace:
+  repoName: roshinimichael/appsmith
+  repoUrl: https://github.com/roshinimichael/appsmith
+metadata:
+  schemaVersion: v1
+  mcpVersion: 0.2.150-rc.sut
+  executorVersion: v1.3.25
+  createdAt: "2026-06-05T17:28:39.669Z"
+  updatedAt: "2026-06-05T17:28:39.676Z"
+services:
+  - serviceName: appsmith-server-backend
+    language: java
+    framework: junit
+    testDirectory: app/server/src/test/java
+    api:
+      authType: cookie
+      authHeader: Cookie
+      baseUrl: http://localhost
+    runtimeDetails:
+      serverStartCommand: bash .skyramp/sut/start.sh
+      runtime: docker
+  - serviceName: appsmith-client-frontend
+    language: typescript
+    framework: playwright
+    testDirectory: app/client/playwright/tests
+    api:
+      authType: cookie
+      authHeader: Cookie
+      baseUrl: http://localhost
+    runtimeDetails:
+      serverStartCommand: bash .skyramp/sut/start.sh
+      runtime: docker
